@@ -245,12 +245,20 @@ func certificateAction(ctx *cli.Context) error {
 				case "Audience":
 					t_claims[i] = jwt.Audience
 				}
+				case "Email": {
+					if jwt.Email != "" {
+						t.claims[i] = jwt.Email
+					}
+				}
 			}
 		}
 		subject = fmt.Sprintf(t_format, t_claims...)
 		t_y = strings.Split(subject, ",")
 		t_cn := strings.TrimPrefix(t_y[0], "CN=")
 		sans = append(sans, t_cn)
+		if jwt.Email != "" && t_cn != jwt.Email {
+			sans = append(sans, jwt.Email)
+		}
 	}
 
 	switch jwt.Payload.Type() {
