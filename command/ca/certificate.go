@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -21,6 +22,7 @@ func certificateCommand() cli.Command {
 		Usage:  "generate a new private key and certificate signed by the root certificate",
 		UsageText: `**step ca certificate** <subject> <crt-file> <key-file>
 [**--token**=<token>]  [**--issuer**=<name>] [**--ca-url**=<uri>] [**--root**=<file>]
+[**--id-token**=<id token>] [**id-token-subject**="<printf format> <claims ...>"]
 [**--not-before**=<time|duration>] [**--not-after**=<time|duration>]
 [**--san**=<SAN>] [**--acme**=<path>] [**--standalone**] [**--webroot**=<path>]
 [**--contact**=<email>] [**--http-listen**=<address>] [**--bundle**]
@@ -34,6 +36,7 @@ func certificateCommand() cli.Command {
 :  The Common Name, DNS Name, or IP address that will be set as the
 Subject Common Name for the certificate. If no Subject Alternative Names (SANs)
 are configured (via the --san flag) then the <subject> will be set as the only SAN.
+If --id-token is supplied this value is ignored.
 
 <crt-file>
 :  File to write the certificate (PEM format)
@@ -123,6 +126,8 @@ $ step ca certificate foo.internal foo.crt foo.key \
 			flags.CaURL,
 			flags.Root,
 			flags.Token,
+			flags.IdToken,
+			flags.IdTokenSubject,
 			flags.Provisioner,
 			cli.StringFlag{
 				Name: "provisioner-password-file",
@@ -160,6 +165,8 @@ func certificateAction(ctx *cli.Context) error {
 	crtFile, keyFile := args.Get(1), args.Get(2)
 
 	tok := ctx.String("token")
+	idToken := ctx.String("id-token")
+	idTokenSubject := ctx.String("id-token-subject")
 	offline := ctx.Bool("offline")
 	sans := ctx.StringSlice("san")
 	provisionerPasswordFile := ctx.String("provisioner-password-file")
@@ -168,6 +175,9 @@ func certificateAction(ctx *cli.Context) error {
 	// the start of the offline CA.
 	if offline && len(tok) != 0 {
 		return errs.IncompatibleFlagWithFlag(ctx, "offline", "token")
+	}
+	if offline && len(idToken) != 0 {
+		return errs.IncompatibleFlagWithFlag(ctx, "offline", "id-token")
 	}
 
 	// Hack to make the flag "password-file" the content of
@@ -178,6 +188,14 @@ func certificateAction(ctx *cli.Context) error {
 	flow, err := cautils.NewCertificateFlow(ctx)
 	if err != nil {
 		return err
+	}
+
+	if len(tok) != 0 && len(idToken) != 0 {
+		return errs.IncompatibleFlagWithFlag(ctx, "token", "id-token")
+	}
+
+	if len(idToken) > 0 {
+		tok = idToken
 	}
 
 	if len(tok) == 0 {
@@ -196,14 +214,43 @@ func certificateAction(ctx *cli.Context) error {
 		}
 	}
 
-	req, pk, err := flow.CreateSignRequest(ctx, tok, subject, sans)
+	jwt, err := token.ParseInsecure(tok)
 	if err != nil {
 		return err
 	}
 
-	jwt, err := token.ParseInsecure(tok)
-	if err != nil {
-		return err
+	if len(idToken) > 0 {
+		t_format := "CN=%s#%s,O=%s"
+		t_claims = make([]interface{}, 3)
+		t_claims[0] = jwt.Issuer
+		t_claims[1] = jwt.Subject
+		t_claims[2] = jwt.Audience
+		if len(idTokenSubject) > 0 {
+			t_x := strings.Split(idTokenSubject, " ")
+			if len(t_x) < 2 {
+				return errors.Errorf("--id-token-subject '%s' invalid - must be: <printf format eg: 'CN=%s' or 'CN=%s#%s,O=%s'> <claims: 'Issuer Subject Audience'")
+			}
+			t_format = t_x[0]
+			if !strings.HasPrefix(t_format, "CN=") {
+				return errors.Errorf("--id-token-subject '%' invalid - must start with 'CN='")
+			}
+			// https://groups.google.com/forum/#!topic/golang-nuts/yTxmAjoc_vw
+			t_claims = make([]interface{}, len(t_x[1:]))
+			for i, v := range t_x[1:] {
+				switch v {
+				case "Issuer":
+					t_claims[i] = jwt.Issuer
+				case "Subject":
+					t_claims[i] = jwt.Subject
+				case "Audience":
+					t_claims[i] = jwt.Audience
+				}
+			}
+		}
+		subject = fmt.Sprintf(t_format, t_claims...)
+		t_y = strings.Split(subject, ",")
+		t_cn := strings.TrimPrefix(t_y[0], "CN=")
+		sans = append(sans, t_cn)
 	}
 
 	switch jwt.Payload.Type() {
@@ -221,11 +268,16 @@ func certificateAction(ctx *cli.Context) error {
 		if email := req.CsrPEM.EmailAddresses[0]; email != subject {
 			return errors.Errorf("token email '%s' and argument '%s' do not match", email, subject)
 		}
-	case token.AWS, token.GCP, token.Azure, token.K8sSA:
+	case token.AWS, token.GCP, token.Azure, token.K8sSA, token.JWT:
 		// Common name will be validated on the server side, it depends on
 		// server configuration.
 	default:
 		return errors.New("token is not supported")
+	}
+
+	req, pk, err := flow.CreateSignRequest(ctx, tok, subject, sans)
+	if err != nil {
+		return err
 	}
 
 	if err = flow.Sign(ctx, tok, req.CsrPEM, crtFile); err != nil {
