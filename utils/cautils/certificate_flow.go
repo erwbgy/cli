@@ -308,7 +308,7 @@ func (f *CertificateFlow) CreateSignRequest(ctx *cli.Context, tok, subject strin
 
 // splitSANs unifies the SAN collections passed as arguments and returns a list
 // of DNS names, a list of IP addresses, and a list of emails.
-func splitSANs(args ...[]string) (dnsNames []string, ipAddresses []net.IP, email []string) {
+func splitSANs(args ...[]string) (dnsNames []string, ipAddresses []net.IP, email []string, uri []string) {
 	m := make(map[string]bool)
 	var unique []string
 	for _, sans := range args {

@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"io/ioutil"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,17 +23,20 @@ func Fingerprint(cert *x509.Certificate) string {
 }
 
 // SplitSANs splits a slice of Subject Alternative Names into slices of
-// IP Addresses and DNS Names. If an element is not an IP address, then it
+// URIs, IP Addresses and DNS Names. If an element is not an IP address, then it
 // is bucketed as a DNS Name.
-func SplitSANs(sans []string) (dnsNames []string, ips []net.IP, emails []string) {
+func SplitSANs(sans []string) (dnsNames []string, ips []net.IP, emails []string, uris []string) {
 	dnsNames = []string{}
 	ips = []net.IP{}
 	emails = []string{}
+	uris = []string{}
 	if sans == nil {
 		return
 	}
 	for _, san := range sans {
-		if strings.Contains(san, "@") {
+		if _, ok := url.Parse(san); ok {
+			uris = append(uris, san)
+		} else if strings.Contains(san, "@") {
 			emails = append(emails, san)
 		} else if ip := net.ParseIP(san); ip != nil {
 			ips = append(ips, ip)
