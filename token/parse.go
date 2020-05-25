@@ -23,6 +23,7 @@ const (
 	AWS          // Amazon Web Services
 	Azure        // Microsoft Azure
 	K8sSA        // Kubernetes Service Account
+	JWT          // RFC 7519 JSON Web Token
 )
 
 // JSONWebToken represents a JSON Web Token (as specified in RFC7519). Using the
@@ -75,6 +76,8 @@ func (p Payload) Type() Type {
 		return JWK
 	case p.Email != "":
 		return OIDC
+	case len(p.Issuer) > 0 && len(p.Subject) > 0 && len(p.Audience) > 0:
+		return JWT
 	default:
 		return Unknown
 	}
